@@ -1,0 +1,62 @@
+[
+  {
+    "role": "AI Intern",
+    "company": "Nova Labs",
+    "skills_required": ["python", "machine learning", "tensorflow", "pytorch"],
+    "location": "remote"
+  },
+  {
+    "role": "Data Analyst Intern",
+    "company": "BluePeak",
+    "skills_required": ["sql", "excel", "python", "tableau"],
+    "location": "bangalore"
+  },
+  {
+    "role": "Frontend Developer Intern",
+    "company": "Webify Solutions",
+    "skills_required": ["html", "css", "javascript", "react"],
+    "location": "mumbai"
+  },
+  {
+    "role": "Backend Engineering Intern",
+    "company": "ServerCore",
+    "skills_required": ["python", "django", "sql", "git"],
+    "location": "remote"
+  },
+  {
+    "role": "UX/UI Design Intern",
+    "company": "Creative Minds",
+    "skills_required": ["figma", "wireframing", "prototyping", "css"],
+    "location": "pune"
+  },
+  {
+    "role": "Cybersecurity Intern",
+    "company": "SecurIT",
+    "skills_required": ["linux", "networking", "python", "bash"],
+    "location": "hyderabad"
+  },
+  {
+    "role": "Product Management Intern",
+    "company": "LaunchPad Inc",
+    "skills_required": ["agile", "jira", "communication", "data analysis"],
+    "location": "bangalore"
+  },
+  {
+    "role": "Cloud DevOps Intern",
+    "company": "SkyNet Solutions",
+    "skills_required": ["aws", "docker", "kubernetes", "linux"],
+    "location": "remote"
+  },
+  {
+    "role": "Marketing Intern",
+    "company": "BrandBoost",
+    "skills_required": ["seo", "content writing", "social media", "analytics"],
+    "location": "delhi"
+  },
+  {
+    "role": "Software Engineering Intern",
+    "company": "Tech giants",
+    "skills_required": ["java", "data structures", "algorithms", "c++"],
+    "location": "noida"
+  }
+]
