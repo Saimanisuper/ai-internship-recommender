@@ -58,5 +58,53 @@
     "company": "Tech giants",
     "skills_required": ["java", "data structures", "algorithms", "c++"],
     "location": "noida"
+  },
+  {
+    "role": "Legal Intern",
+    "company": "Justice Chambers",
+    "skills_required": ["legal research", "drafting", "contract law", "communication"],
+    "location": "delhi"
+  },
+  {
+    "role": "Medical Research Intern",
+    "company": "LifeCare Hospitals",
+    "skills_required": ["anatomy", "data entry", "patient care", "biology"],
+    "location": "mumbai"
+  },
+  {
+    "role": "Journalism Intern",
+    "company": "Daily Chronicle",
+    "skills_required": ["writing", "editing", "interviewing", "investigative research"],
+    "location": "bangalore"
+  },
+  {
+    "role": "Finance Intern",
+    "company": "WealthMakers Inc.",
+    "skills_required": ["accounting", "excel", "financial modeling", "economics"],
+    "location": "mumbai"
+  },
+  {
+    "role": "Human Resources Intern",
+    "company": "PeopleFirst",
+    "skills_required": ["recruitment", "communication", "onboarding", "conflict resolution"],
+    "location": "pune"
+  },
+  {
+    "role": "Architecture Intern",
+    "company": "Urban Designs",
+    "skills_required": ["autocad", "3d modeling", "sketchup", "drafting"],
+    "location": "remote"
+  },
+  {
+    "role": "Sales Intern",
+    "company": "Growth Dynamics",
+    "skills_required": ["negotiation", "crm", "lead generation", "communication"],
+    "location": "hyderabad"
+  },
+  {
+    "role": "Education & Teaching Intern",
+    "company": "EduFuture",
+    "skills_required": ["lesson planning", "public speaking", "mentoring", "patience"],
+    "location": "remote"
   }
 ]

@@ -36,14 +36,14 @@ export default function ProfilePage({ onSubmit }) {
         
         <form onSubmit={handleSubmit}>
           
-          {/* Main Technical Requirements input block */}
+          {/* Main Professional Skills input block */}
           <div className="input-group">
-            <label htmlFor="skills">Technical Skills (comma separated)</label>
+            <label htmlFor="skills">Key Skills (comma separated)</label>
             <input 
               type="text" 
               id="skills"
               className="input-field" 
-              placeholder="e.g. Python, React, Machine Learning"
+              placeholder="e.g. Legal Research, Anatomy, Python"
               value={skills}
               onChange={(e) => setSkills(e.target.value)}
               required
@@ -57,7 +57,7 @@ export default function ProfilePage({ onSubmit }) {
               type="text" 
               id="interests"
               className="input-field" 
-              placeholder="e.g. AI, Web Development, Fintech"
+              placeholder="e.g. Corporate Law, Healthcare, AI"
               value={interests}
               onChange={(e) => setInterests(e.target.value)}
             />
