@@ -1,3 +1,11 @@
-node_modules\
-__pycache__/\
+node_modules/
+__pycache__/
 .env
+API.txt
+kaggleToken.txt
+datasetID.txt
+*.db
+*.sqlite3
+backend/data/uploads/
+backend/data/jobs_cache.csv
+backend/data/jobs_cache.json

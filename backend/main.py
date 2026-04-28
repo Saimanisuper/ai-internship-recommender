@@ -1,55 +1,198 @@
-from fastapi import FastAPI, HTTPException
+from typing import Any
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List, Optional
 
-# Import the pre-initialized recommender engine
-from recommender import recommender_instance
+try:
+    from .database import init_db, list_jobs, recent_chats, save_chat, save_resume_profile
+    from .recommender import recommender_instance
+    from .resume_parser import (
+        expand_skills,
+        extract_structured_skills,
+        extract_text_from_upload,
+        flatten_skills,
+        skill_frequency,
+    )
+except ImportError:
+    from database import init_db, list_jobs, recent_chats, save_chat, save_resume_profile
+    from recommender import recommender_instance
+    from resume_parser import (
+        expand_skills,
+        extract_structured_skills,
+        extract_text_from_upload,
+        flatten_skills,
+        skill_frequency,
+    )
 
-# Setup the FastAPI application instance
+USER_ID = 1
+
 app = FastAPI(
-    title="InternMatch AI Engine",
-    description="A Machine Learning powered Internship Recommendation Engine.",
-    version="1.0.0"
+    title="AI Resume Job Discovery API",
+    description="Resume parsing, hybrid job recommendations, and career chat for the prototype.",
+    version="2.0.0",
 )
 
-# Configure Cross-Origin Resource Sharing (CORS) to accept requests from our React App
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, restrict this to specific origins (e.g., frontend domain)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-class StudentProfile(BaseModel):
-    """
-    Pydantic Input Model capturing a User's distinct skillset and preferences.
-    Used for schema validation on incoming POST requests.
-    """
-    skills: List[str] = Field(..., description="A rigorous list of strings reflecting the technical skills a user possesses.", example=["python", "machine learning"])
-    interests: Optional[List[str]] = Field(default=[], description="Auxiliary interest areas that might inform future recommendations.", example=["cloud computing", "web dev"])
-    education: Optional[str] = Field(default="", description="The user's highest degree or current academic pursuit.", example="B.Tech Computer Science")
 
-@app.post("/recommend", response_model=List[dict], summary="Get Personalized ML Recommendations")
-def recommend_internships(profile: StudentProfile):
-    """
-    Main Endpoint.
-    Consumes a StudentProfile, invokes the local TF-IDF model, and returns a JSON 
-    array of ranked internship positions with matching explainability contexts.
-    """
+class RecommendationRequest(BaseModel):
+    skills: list[str] = Field(default_factory=list)
+    interests: list[str] = Field(default_factory=list)
+    education: str = ""
+    structured_skills: dict[str, list[str]] = Field(default_factory=dict)
+    limit: int = 8
+
+
+class ChatRequest(BaseModel):
+    message: str
+    skills: list[str] = Field(default_factory=list)
+    recommendations: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_db()
+    recommender_instance.refresh()
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/jobs")
+def jobs() -> list[dict[str, Any]]:
+    return list_jobs()
+
+
+@app.post("/upload_resume")
+async def upload_resume(file: UploadFile = File(...)) -> dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename.")
+
     try:
-        # Pass validated object straight to our recommender
-        recommendations = recommender_instance.recommend(profile)
-        return recommendations
-    except Exception as server_error:
-        # Wrap underlying algorithm errors to prevent service crashes
-        raise HTTPException(
-            status_code=500, 
-            detail=f"An error occurred while generating recommendations: {str(server_error)}"
+        raw_text = extract_text_from_upload(file.file, file.filename)
+    except RuntimeError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=422, detail=f"Could not parse resume: {error}") from error
+
+    structured_skills = extract_structured_skills(raw_text)
+    skills = flatten_skills(structured_skills)
+    expanded_skills = expand_skills(skills)
+
+    if not raw_text.strip():
+        raise HTTPException(status_code=422, detail="The resume appears to be empty or unreadable.")
+
+    resume_id = save_resume_profile(USER_ID, file.filename, raw_text, structured_skills)
+    recommendations = recommender_instance.recommend(
+        {
+            "skills": expanded_skills,
+            "structured_skills": structured_skills,
+            "interests": [],
+            "education": "",
+        }
+    )
+
+    return {
+        "resume_id": resume_id,
+        "user_id": USER_ID,
+        "filename": file.filename,
+        "text_preview": raw_text[:700],
+        "structured_skills": structured_skills,
+        "skills": skills,
+        "expanded_skills": expanded_skills,
+        "skill_frequency": skill_frequency(raw_text, expanded_skills),
+        "recommendations": recommendations,
+    }
+
+
+@app.post("/recommend")
+def recommend(request: RecommendationRequest) -> list[dict[str, Any]]:
+    if not request.skills and not flatten_skills(request.structured_skills):
+        return []
+    return recommender_instance.recommend(request, limit=request.limit)
+
+
+@app.post("/chat")
+def chat(request: ChatRequest) -> dict[str, Any]:
+    if not request.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    response = build_chat_response(request)
+    chat_id = save_chat(USER_ID, request.message, response)
+    return {"id": chat_id, "user_id": USER_ID, "response": response}
+
+
+@app.get("/chats")
+def chats() -> list[dict[str, Any]]:
+    return recent_chats(USER_ID)
+
+
+@app.post("/refresh_jobs")
+def refresh_jobs() -> dict[str, Any]:
+    recommender_instance.refresh()
+    return {"status": "refreshed", "jobs": len(recommender_instance.jobs)}
+
+
+def build_chat_response(request: ChatRequest) -> str:
+    message = request.message.lower()
+    recommendations = request.recommendations or []
+    top_job = recommendations[0] if recommendations else None
+
+    if not top_job:
+        return (
+            "Upload a resume or add skills first, then I can explain matches, gaps, "
+            "and a learning path."
         )
 
+    matched = top_job.get("matched_skills", [])
+    missing = top_job.get("missing_skills", [])
+    role = top_job.get("role", "this role")
+    company = top_job.get("company", "the company")
+
+    if "why" in message or "match" in message:
+        return (
+            f"{role} at {company} is your best current match because it overlaps with "
+            f"{format_list(matched) or 'your strongest profile signals'}. "
+            f"The most useful next skills are {format_list(missing) or 'already covered'}."
+        )
+
+    if "learn" in message or "improve" in message or "gap" in message:
+        gap_skills = missing[:3]
+        if not gap_skills:
+            return f"You already cover the core listed skills for {role}. Build one portfolio project that proves them together."
+        return (
+            "Prioritize this learning path: "
+            + " -> ".join(skill.title() for skill in gap_skills)
+            + f". Then update your resume with a small project using those skills for {role}."
+        )
+
+    if "best" in message or "top" in message:
+        lines = []
+        for index, job in enumerate(recommendations[:3], start=1):
+            score = round(job.get("match_score", 0) * 100)
+            lines.append(f"{index}. {job['role']} at {job['company']} ({score}%)")
+        return "Your top matches are: " + " ".join(lines)
+
+    return (
+        f"For {role}, emphasize {format_list(matched) or 'your closest relevant skills'} "
+        f"and close gaps around {format_list(missing) or 'project evidence and interview readiness'}."
+    )
+
+
+def format_list(values: list[str]) -> str:
+    return ", ".join(value.title() for value in values[:5])
+
+
 if __name__ == "__main__":
-    # Standard entry point when executed sequentially vs `uvicorn backend.main:app`
     import uvicorn
+
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

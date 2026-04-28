@@ -1,156 +1,143 @@
-import json
-import logging
-import pathlib
-from typing import List, Dict, Any
+from dataclasses import dataclass
+from typing import Any
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# Configure logging for better readability and debugging
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+try:
+    from .database import list_jobs
+    from .resume_parser import expand_skills, flatten_skills, weighted_skill_scores
+except ImportError:
+    from database import list_jobs
+    from resume_parser import expand_skills, flatten_skills, weighted_skill_scores
 
-# Define the absolute path to the mock dataset
-DATA_PATH = pathlib.Path(__file__).parent / "data" / "internships.json"
 
-class InternshipRecommender:
-    """
-    A unified Machine Learning engine to rank internships for a student profile
-    using TF-IDF Vectorization and Cosine Similarity.
-    """
+@dataclass
+class RecommendationProfile:
+    skills: list[str]
+    interests: list[str]
+    education: str = ""
+    structured_skills: dict[str, list[str]] | None = None
 
-    def __init__(self):
-        """Initializes the recommender by loading data and training the TF-IDF model."""
-        self.internships = self._load_dataset()
-        self.vectorizer = TfidfVectorizer()
-        self.tfidf_matrix = self._train_tfidf_model()
 
-    def _load_dataset(self) -> List[Dict[str, Any]]:
-        """
-        Loads the static JSON dataset containing internship postings.
+class JobRecommender:
+    def __init__(self) -> None:
+        self.jobs: list[dict[str, Any]] = []
+        self.vectorizer = TfidfVectorizer(ngram_range=(1, 2), stop_words="english")
+        self.tfidf_matrix = None
+        self.refresh()
 
-        Returns:
-            List[Dict]: A list of internship dictionary objects.
-        """
-        try:
-            with open(DATA_PATH, "r", encoding="utf-8") as file:
-                return json.load(file)
-        except Exception as error:
-            logging.error(f"Error loading {DATA_PATH}: {error}")
+    def refresh(self) -> None:
+        self.jobs = list_jobs(limit=1000)
+        documents = [self._job_document(job) for job in self.jobs]
+        self.tfidf_matrix = self.vectorizer.fit_transform(documents) if documents else None
+
+    def recommend(self, profile: Any, limit: int = 8) -> list[dict[str, Any]]:
+        normalized_profile = self._coerce_profile(profile)
+        user_skills = set(expand_skills(normalized_profile.skills))
+        if not user_skills or self.tfidf_matrix is None:
             return []
 
-    def _train_tfidf_model(self):
-        """
-        Prepares the document corpus based on required skills and trains the TF-IDF model.
+        weights = weighted_skill_scores(normalized_profile.structured_skills or {})
+        query = " ".join(
+            list(user_skills)
+            + normalized_profile.interests
+            + [normalized_profile.education]
+        )
+        query_vector = self.vectorizer.transform([query])
+        tfidf_scores = cosine_similarity(query_vector, self.tfidf_matrix).flatten()
 
-        Returns:
-            sparse matrix or None: The fitted TF-IDF matrix representing the corpus.
-        """
-        self.documents = []
-        for internship in self.internships:
-            # Normalize the skills and join them into a single String "document"
-            skills_list = internship.get("skills_required", [])
-            skills_string = " ".join([skill.lower().strip() for skill in skills_list])
-            self.documents.append(skills_string)
-            
-        if self.documents:
-            return self.vectorizer.fit_transform(self.documents)
-        return None
-
-    def _normalize_user_skills(self, profile) -> set:
-        """
-        Extracts, cleans, and deduplicates the skills from the user's profile.
-
-        Args:
-            profile: Pydantic model representing the student profile.
-            
-        Returns:
-            set: A set of normalized, lowercase skill strings.
-        """
-        user_skills_raw = getattr(profile, 'skills', [])
-        cleaned_skills = [skill.strip().lower() for skill in user_skills_raw if skill.strip()]
-        return set(cleaned_skills)
-
-    def _generate_explanation(self, matched: List[str], missing: List[str]) -> str:
-        """
-        Generates a human-readable explanation based on matched and missing skills.
-
-        Args:
-            matched: A list of matched valid skills.
-            missing: A list of skills lacking in the user's profile.
-
-        Returns:
-            str: The generated explanation.
-        """
-        if matched:
-            matched_formatted = ", ".join([m.title() for m in matched])
-            explanation = f"You match this role due to {matched_formatted}."
-            
-            if missing:
-                missing_formatted = ", ".join([m.title() for m in missing])
-                explanation += f" Learning {missing_formatted} will improve your chances."
-        else:
-            missing_formatted = ", ".join([m.title() for m in missing]) if missing else "the required skills"
-            explanation = f"While you don't have exact technical matches, your profile loosely aligns with this role. Learning {missing_formatted} is recommended."
-        
-        return explanation
-
-    def recommend(self, profile) -> List[Dict[str, Any]]:
-        """
-        Recommends ranked internships based on a user's profile.
-
-        Args:
-            profile: Pydantic model containing the user's skills and interests.
-
-        Returns:
-            List[Dict]: A list of sorted and evaluated internships.
-        """
-        # 1. Normalize user's input skills
-        user_skills_set = self._normalize_user_skills(profile)
-        if not user_skills_set or self.tfidf_matrix is None:
-            return []
-            
-        # 2. Vectorize the user's search query and compute cosine similarities
-        user_query = " ".join(user_skills_set)
-        query_vector = self.vectorizer.transform([user_query])
-        similarities = cosine_similarity(query_vector, self.tfidf_matrix).flatten()
-        
         results = []
-        
-        # 3. Evaluate each internship listing against the user's similarity rating
-        for idx, similarity_score in enumerate(similarities):
-            internship = self.internships[idx]
-            
-            req_skills = [s.strip().lower() for s in internship.get("skills_required", [])]
-            req_skills_set = set(req_skills)
-            
-            # Identify intersections to feed our explainable AI response
-            matched = list(user_skills_set.intersection(req_skills_set))
-            missing = list(req_skills_set.difference(user_skills_set))
-            
-            # Compute a hybrid score bridging pure ML string similarity with explicit keyword matching
-            basic_match_ratio = len(matched) / len(req_skills_set) if req_skills_set else 0.0
-            hybrid_score = (similarity_score * 0.7) + (basic_match_ratio * 0.3)
-            
-            # Ignore listings where the score is negligibly low
-            if hybrid_score <= 0.01:
-                continue
-                
-            # Synthesize the explanation
-            explanation = self._generate_explanation(matched, missing)
-                
-            results.append({
-                "role": internship["role"],
-                "company": internship["company"],
-                "location": internship.get("location", "N/A"),
-                "match_score": hybrid_score,
-                "matched_skills": matched,
-                "missing_skills": missing,
-                "explanation": explanation
-            })
-            
-        # 4. Sort descending by match_score and return to the Frontend
-        results.sort(key=lambda x: x["match_score"], reverse=True)
-        return results
+        for index, job in enumerate(self.jobs):
+            required = [skill.lower().strip() for skill in job.get("skills_required", [])]
+            required_set = set(required)
+            matched = sorted(user_skills.intersection(required_set))
+            missing = sorted(required_set.difference(user_skills))
 
-# Singleton instance to expose directly to FastAPI endpoint
-recommender_instance = InternshipRecommender()
+            weighted_overlap = self._weighted_overlap(required, user_skills, weights)
+            plain_overlap = len(matched) / len(required_set) if required_set else 0.0
+            embedding_proxy = tfidf_scores[index]
+            final_score = (0.5 * embedding_proxy) + (0.3 * tfidf_scores[index]) + (0.2 * weighted_overlap)
+
+            if final_score <= 0.01 and plain_overlap == 0:
+                continue
+
+            results.append(
+                {
+                    "id": job["id"],
+                    "role": job["role"],
+                    "company": job["company"],
+                    "location": job.get("location", "remote"),
+                    "date_posted": job.get("date_posted"),
+                    "match_score": round(float(final_score), 4),
+                    "tfidf_score": round(float(tfidf_scores[index]), 4),
+                    "overlap_score": round(float(plain_overlap), 4),
+                    "matched_skills": matched,
+                    "missing_skills": missing[:6],
+                    "skills_required": required,
+                    "explanation": self._explain(job, matched, missing),
+                }
+            )
+
+        results.sort(key=lambda item: item["match_score"], reverse=True)
+        return results[:limit]
+
+    def _coerce_profile(self, profile: Any) -> RecommendationProfile:
+        if isinstance(profile, dict):
+            structured = profile.get("structured_skills") or {}
+            skills = profile.get("skills") or flatten_skills(structured)
+            return RecommendationProfile(
+                skills=[str(skill).lower().strip() for skill in skills if str(skill).strip()],
+                interests=profile.get("interests") or [],
+                education=profile.get("education") or "",
+                structured_skills=structured,
+            )
+
+        structured = getattr(profile, "structured_skills", None) or {}
+        skills = getattr(profile, "skills", None) or flatten_skills(structured)
+        return RecommendationProfile(
+            skills=[str(skill).lower().strip() for skill in skills if str(skill).strip()],
+            interests=getattr(profile, "interests", []) or [],
+            education=getattr(profile, "education", "") or "",
+            structured_skills=structured,
+        )
+
+    def _job_document(self, job: dict[str, Any]) -> str:
+        return " ".join(
+            [
+                job.get("role", ""),
+                job.get("company", ""),
+                job.get("description", ""),
+                " ".join(job.get("skills_required", [])),
+                job.get("location", ""),
+            ]
+        ).lower()
+
+    def _weighted_overlap(
+        self,
+        required: list[str],
+        user_skills: set[str],
+        weights: dict[str, float],
+    ) -> float:
+        if not required:
+            return 0.0
+        possible = sum(weights.get(skill, 0.5) for skill in required)
+        actual = sum(weights.get(skill, 0.5) for skill in required if skill in user_skills)
+        return actual / possible if possible else 0.0
+
+    def _explain(self, job: dict[str, Any], matched: list[str], missing: list[str]) -> str:
+        if matched:
+            matched_text = ", ".join(skill.title() for skill in matched[:4])
+            if missing:
+                missing_text = ", ".join(skill.title() for skill in missing[:3])
+                return (
+                    f"{job['role']} at {job['company']} matches because of {matched_text}. "
+                    f"Learning {missing_text} would make this a stronger fit."
+                )
+            return f"{job['role']} at {job['company']} is a strong fit across the listed skills."
+
+        missing_text = ", ".join(skill.title() for skill in missing[:3]) or "the listed skills"
+        return f"This role is adjacent to your profile. Start with {missing_text} to close the gap."
+
+
+recommender_instance = JobRecommender()
