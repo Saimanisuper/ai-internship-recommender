@@ -1,16 +1,35 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import {
   Bot,
   BriefcaseBusiness,
   FileUp,
+  Loader2,
   MessageSquareText,
   RefreshCw,
   Send,
   Sparkles,
   UserRound,
+  Zap,
 } from 'lucide-react';
+import { useLocalAI } from './hooks/useLocalAI';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+// Simple markdown-like formatting for chat messages (with basic XSS protection)
+function formatMessageText(text) {
+  // Escape HTML entities first to prevent XSS
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+  
+  // Then apply safe formatting
+  return escaped
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br />');
+}
 
 function App() {
   const [resumeFile, setResumeFile] = useState(null);
@@ -26,6 +45,16 @@ function App() {
   const [chatInput, setChatInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
+  const [useLocalModel, setUseLocalModel] = useState(true);
+  const [isTyping, setIsTyping] = useState(false);
+  const messagesEndRef = useRef(null);
+  
+  const { generateResponse: generateLocalResponse } = useLocalAI();
+
+  // Auto-scroll to bottom of messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isTyping]);
 
   const skills = useMemo(() => {
     if (parsedProfile?.expanded_skills?.length) return parsedProfile.expanded_skills;
@@ -114,20 +143,30 @@ function App() {
 
     setChatInput('');
     setMessages((current) => [...current, { role: 'user', text }]);
+    setIsTyping(true);
 
     try {
-      const response = await fetch(`${API_URL}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, skills, recommendations }),
-      });
+      if (useLocalModel) {
+        // Use local AI (free, no API costs)
+        const response = await generateLocalResponse(text, skills, recommendations);
+        setMessages((current) => [...current, { role: 'assistant', text: response }]);
+      } else {
+        // Fallback to backend API
+        const response = await fetch(`${API_URL}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text, skills, recommendations }),
+        });
 
-      if (!response.ok) throw new Error('Chat request failed.');
+        if (!response.ok) throw new Error('Chat request failed.');
 
-      const data = await response.json();
-      setMessages((current) => [...current, { role: 'assistant', text: data.response }]);
+        const data = await response.json();
+        setMessages((current) => [...current, { role: 'assistant', text: data.response }]);
+      }
     } catch (error) {
-      setMessages((current) => [...current, { role: 'assistant', text: error.message }]);
+      setMessages((current) => [...current, { role: 'assistant', text: `Sorry, I encountered an issue: ${error.message}. Please try again.` }]);
+    } finally {
+      setIsTyping(false);
     }
   };
 
@@ -213,15 +252,36 @@ function App() {
           <div className="chat-header">
             <MessageSquareText size={22} />
             <h2>Career Assistant</h2>
+            <button 
+              className={`ai-mode-toggle ${useLocalModel ? 'local' : 'api'}`}
+              onClick={() => setUseLocalModel(!useLocalModel)}
+              title={useLocalModel ? 'Using Local AI (Free)' : 'Using Backend API'}
+            >
+              <Zap size={14} />
+              <span>{useLocalModel ? 'Local AI' : 'API'}</span>
+            </button>
           </div>
 
           <div className="message-list">
             {messages.map((message, index) => (
               <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
                 <span className="avatar">{message.role === 'assistant' ? <Bot size={17} /> : <UserRound size={17} />}</span>
-                <p>{message.text}</p>
+                <div className="message-content" dangerouslySetInnerHTML={{ __html: formatMessageText(message.text) }} />
               </div>
             ))}
+            
+            {isTyping && (
+              <div className="message assistant">
+                <span className="avatar"><Bot size={17} /></span>
+                <div className="message-content typing">
+                  <span className="typing-dot"></span>
+                  <span className="typing-dot"></span>
+                  <span className="typing-dot"></span>
+                </div>
+              </div>
+            )}
+            
+            <div ref={messagesEndRef} />
 
             {recommendations.length > 0 && (
               <div className="jobs-stream">
@@ -249,14 +309,24 @@ function App() {
             )}
           </div>
 
+          <div className="chat-actions">
+            <div className="quick-actions">
+              <button type="button" onClick={() => setChatInput('Why does this job match my profile?')}>Why this match?</button>
+              <button type="button" onClick={() => setChatInput('What skills should I learn next?')}>Skills to learn</button>
+              <button type="button" onClick={() => setChatInput('How do I prepare for interviews?')}>Interview tips</button>
+              <button type="button" onClick={() => setChatInput('Show me my top matches')}>Top matches</button>
+            </div>
+          </div>
+
           <form className="chat-form" onSubmit={sendMessage}>
             <input
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
-              placeholder="Ask why this job fits, what to learn next, or show top matches"
+              placeholder="Ask about job matches, skills, interviews, or portfolio tips..."
+              disabled={isTyping}
             />
-            <button className="send-button" type="submit" title="Send">
-              <Send size={19} />
+            <button className="send-button" type="submit" title="Send" disabled={isTyping}>
+              {isTyping ? <Loader2 size={19} className="spin" /> : <Send size={19} />}
             </button>
           </form>
         </section>
