@@ -1,17 +1,19 @@
 import json
+import os
 import sqlite3
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "app.db"
+DB_PATH = Path(tempfile.gettempdir()) / "app.db" if os.getenv("VERCEL") else DATA_DIR / "app.db"
 SEED_JOBS_PATH = DATA_DIR / "internships.json"
 
 
 def get_connection() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     return connection
