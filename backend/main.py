@@ -26,6 +26,7 @@ except ImportError:
     )
 
 USER_ID = 1
+is_ready = False
 
 app = FastAPI(
     title="AI Resume Job Discovery API",
@@ -58,22 +59,33 @@ class ChatRequest(BaseModel):
 
 @app.on_event("startup")
 def startup() -> None:
+    ensure_ready()
+
+
+def ensure_ready() -> None:
+    global is_ready
+    if is_ready:
+        return
     init_db()
     recommender_instance.refresh()
+    is_ready = True
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    ensure_ready()
     return {"status": "ok"}
 
 
 @app.get("/jobs")
 def jobs() -> list[dict[str, Any]]:
+    ensure_ready()
     return list_jobs()
 
 
 @app.post("/upload_resume")
 async def upload_resume(file: UploadFile = File(...)) -> dict[str, Any]:
+    ensure_ready()
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
 
@@ -116,6 +128,7 @@ async def upload_resume(file: UploadFile = File(...)) -> dict[str, Any]:
 
 @app.post("/recommend")
 def recommend(request: RecommendationRequest) -> list[dict[str, Any]]:
+    ensure_ready()
     if not request.skills and not flatten_skills(request.structured_skills):
         return []
     return recommender_instance.recommend(request, limit=request.limit)
@@ -123,6 +136,7 @@ def recommend(request: RecommendationRequest) -> list[dict[str, Any]]:
 
 @app.post("/chat")
 def chat(request: ChatRequest) -> dict[str, Any]:
+    ensure_ready()
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
@@ -133,11 +147,13 @@ def chat(request: ChatRequest) -> dict[str, Any]:
 
 @app.get("/chats")
 def chats() -> list[dict[str, Any]]:
+    ensure_ready()
     return recent_chats(USER_ID)
 
 
 @app.post("/refresh_jobs")
 def refresh_jobs() -> dict[str, Any]:
+    ensure_ready()
     recommender_instance.refresh()
     return {"status": "refreshed", "jobs": len(recommender_instance.jobs)}
 
