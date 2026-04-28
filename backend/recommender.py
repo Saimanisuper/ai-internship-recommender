@@ -25,7 +25,6 @@ class JobRecommender:
         self.jobs: list[dict[str, Any]] = []
         self.vectorizer = TfidfVectorizer(ngram_range=(1, 2), stop_words="english")
         self.tfidf_matrix = None
-        self.refresh()
 
     def refresh(self) -> None:
         self.jobs = list_jobs(limit=1000)
