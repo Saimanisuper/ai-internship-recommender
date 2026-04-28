@@ -15,9 +15,18 @@ import { useLocalAI } from './hooks/useLocalAI';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-// Simple markdown-like formatting for chat messages
+// Simple markdown-like formatting for chat messages (with basic XSS protection)
 function formatMessageText(text) {
-  return text
+  // Escape HTML entities first to prevent XSS
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+  
+  // Then apply safe formatting
+  return escaped
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\n/g, '<br />');
 }
@@ -40,7 +49,7 @@ function App() {
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef(null);
   
-  const { generateResponse: generateLocalResponse, isProcessing } = useLocalAI();
+  const { generateResponse: generateLocalResponse } = useLocalAI();
 
   // Auto-scroll to bottom of messages
   useEffect(() => {

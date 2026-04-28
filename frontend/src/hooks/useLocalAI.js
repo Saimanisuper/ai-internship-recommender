@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 // Smart career assistant using intelligent pattern matching and templates
 // This provides a rich chat experience without any API costs
@@ -347,7 +347,6 @@ function generateGeneralResponse(message, skills, recommendations) {
 
 export function useLocalAI() {
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isModelLoaded] = useState(true); // No model loading needed for rule-based
   
   const generateResponseAsync = useCallback(async (message, skills = [], recommendations = []) => {
     setIsProcessing(true);
@@ -366,6 +365,5 @@ export function useLocalAI() {
   return {
     generateResponse: generateResponseAsync,
     isProcessing,
-    isModelLoaded,
   };
 }
