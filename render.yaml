@@ -1,4 +1,5 @@
 services:
+  # Python FastAPI Backend
   - type: web
     name: ai-internship-backend
     env: python
@@ -9,3 +10,15 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.8
+
+  # React Frontend (Static Site)
+  - type: web
+    name: ai-internship-frontend
+    env: static
+    rootDir: frontend
+    buildCommand: "npm install && npm run build"
+    staticPublishPath: dist
+    plan: free
+    envVars:
+      - key: VITE_API_URL
+        value: https://ai-internship-backend.onrender.com
