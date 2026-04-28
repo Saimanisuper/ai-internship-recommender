@@ -1,7 +1,10 @@
+import os
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from openai import OpenAI
 from pydantic import BaseModel, Field
 
 try:
@@ -28,6 +31,33 @@ except ImportError:
 USER_ID = 1
 is_ready = False
 
+# Initialize OpenAI client - works with OPENAI_API_KEY env var
+openai_client: OpenAI | None = None
+
+def get_openai_client() -> OpenAI | None:
+    global openai_client
+    if openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if api_key:
+            openai_client = OpenAI(api_key=api_key)
+    return openai_client
+
+SYSTEM_PROMPT = """You are an expert AI career coach specializing in internship recommendations and career guidance. You help users:
+
+1. Understand why specific internships match their profile
+2. Identify skill gaps and create learning paths
+3. Provide actionable advice on building portfolios
+4. Give interview preparation tips
+5. Suggest networking strategies
+
+Your responses should be:
+- Concise but helpful (2-4 sentences unless user asks for details)
+- Specific to the user's skills and recommended jobs
+- Encouraging but realistic
+- Action-oriented with clear next steps
+
+You have access to the user's skills and current job recommendations. Reference them specifically in your advice."""
+
 app = FastAPI(
     title="AI Resume Job Discovery API",
     description="Resume parsing, hybrid job recommendations, and career chat for the prototype.",
@@ -51,10 +81,16 @@ class RecommendationRequest(BaseModel):
     limit: int = 8
 
 
+class ChatMessage(BaseModel):
+    role: str
+    text: str
+
+
 class ChatRequest(BaseModel):
     message: str
     skills: list[str] = Field(default_factory=list)
     recommendations: list[dict[str, Any]] = Field(default_factory=list)
+    history: list[ChatMessage] = Field(default_factory=list)
 
 
 @app.on_event("startup")
@@ -140,9 +176,41 @@ def chat(request: ChatRequest) -> dict[str, Any]:
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
-    response = build_chat_response(request)
+    client = get_openai_client()
+    if client:
+        response = build_ai_chat_response(client, request)
+    else:
+        response = build_chat_response(request)
+    
     chat_id = save_chat(USER_ID, request.message, response)
     return {"id": chat_id, "user_id": USER_ID, "response": response}
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """Streaming chat endpoint for real-time AI responses."""
+    ensure_ready()
+    if not request.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    client = get_openai_client()
+    if not client:
+        # Fallback to non-streaming response
+        response = build_chat_response(request)
+        async def single_response():
+            yield f"data: {response}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(single_response(), media_type="text/event-stream")
+
+    return StreamingResponse(
+        stream_ai_response(client, request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/chats")
@@ -206,6 +274,102 @@ def build_chat_response(request: ChatRequest) -> str:
 
 def format_list(values: list[str]) -> str:
     return ", ".join(value.title() for value in values[:5])
+
+
+def build_context_message(request: ChatRequest) -> str:
+    """Build a context message with user's skills and recommendations."""
+    context_parts = []
+    
+    if request.skills:
+        context_parts.append(f"User's skills: {', '.join(request.skills[:15])}")
+    
+    if request.recommendations:
+        jobs_summary = []
+        for job in request.recommendations[:5]:
+            matched = job.get("matched_skills", [])
+            missing = job.get("missing_skills", [])
+            score = round(job.get("match_score", 0) * 100)
+            jobs_summary.append(
+                f"- {job.get('role', 'Unknown')} at {job.get('company', 'Unknown')} "
+                f"({score}% match, matches: {', '.join(matched[:3]) or 'none'}, "
+                f"gaps: {', '.join(missing[:3]) or 'none'})"
+            )
+        context_parts.append("Recommended internships:\n" + "\n".join(jobs_summary))
+    
+    return "\n\n".join(context_parts) if context_parts else "No profile data available yet."
+
+
+def build_ai_chat_response(client: OpenAI, request: ChatRequest) -> str:
+    """Generate an AI response using OpenAI."""
+    try:
+        context = build_context_message(request)
+        
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": f"Current user context:\n{context}"},
+        ]
+        
+        # Add conversation history
+        for msg in request.history[-10:]:  # Keep last 10 messages
+            role = "assistant" if msg.role == "assistant" else "user"
+            messages.append({"role": role, "content": msg.text})
+        
+        # Add current message
+        messages.append({"role": "user", "content": request.message})
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=500,
+            temperature=0.7,
+        )
+        
+        return response.choices[0].message.content or "I couldn't generate a response. Please try again."
+    
+    except Exception as e:
+        # Fallback to rule-based response on error
+        return build_chat_response(request)
+
+
+async def stream_ai_response(client: OpenAI, request: ChatRequest):
+    """Stream AI response using Server-Sent Events."""
+    try:
+        context = build_context_message(request)
+        
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": f"Current user context:\n{context}"},
+        ]
+        
+        for msg in request.history[-10:]:
+            role = "assistant" if msg.role == "assistant" else "user"
+            messages.append({"role": role, "content": msg.text})
+        
+        messages.append({"role": "user", "content": request.message})
+        
+        stream = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=500,
+            temperature=0.7,
+            stream=True,
+        )
+        
+        full_response = ""
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                full_response += content
+                yield f"data: {content}\n\n"
+        
+        # Save chat after streaming completes
+        save_chat(USER_ID, request.message, full_response)
+        yield "data: [DONE]\n\n"
+        
+    except Exception as e:
+        # Send error message
+        yield f"data: Sorry, I encountered an error. Please try again.\n\n"
+        yield "data: [DONE]\n\n"
 
 
 if __name__ == "__main__":
